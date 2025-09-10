@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Layer Merge (no CSS)</title>
+</head>
+<body>
+  <h3>Merge two images (overlay as a sticker)</h3>
+
+  <div>
+    <label>Base image: <input id="baseFile" type="file" accept="image/*"></label>
+  </div>
+  <div>
+    <label>Overlay image: <input id="overlayFile" type="file" accept="image/*"></label>
+  </div>
+
+  <fieldset>
+    <legend>Overlay position/size</legend>
+    <label>X: <input id="x" type="number" value="0" step="1"></label>
+    <label>Y: <input id="y" type="number" value="0" step="1"></label>
+    <label>Scale (%): <input id="scale" type="number" value="100" min="1" step="1"></label>
+    <label>Opacity (0–1): <input id="opacity" type="number" value="1" min="0" max="1" step="0.05"></label>
+  </fieldset>
+
+  <p id="info">Load two images to begin.</p>
+
+  <canvas id="c" width="0" height="0">Canvas not supported.</canvas>
+
+  <div>
+    <button id="download" disabled>Download Merged PNG</button>
+  </div>
+
+  <script>
+    const baseInput = document.getElementById('baseFile');
+    const overlayInput = document.getElementById('overlayFile');
+    const xIn = document.getElementById('x');
+    const yIn = document.getElementById('y');
+    const scaleIn = document.getElementById('scale');
+    const opIn = document.getElementById('opacity');
+    const info = document.getElementById('info');
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const dlBtn = document.getElementById('download');
+
+    let baseURL = null, overlayURL = null;
+    const baseImg = new Image();
+    const overlayImg = new Image();
+    let baseLoaded = false, overlayLoaded = false;
+
+    // Overlay placement state
+    let pos = { x: 0, y: 0, scale: 1, opacity: 1 };
+
+    // Dragging
+    let dragging = false;
+    let dragDX = 0, dragDY = 0;
+
+    function n(el, def=0){ const v = parseFloat(el.value); return Number.isFinite(v) ? v : def; }
+
+    function overlaySize() {
+      const s = pos.scale;
+      return {
+        w: Math.round(overlayImg.naturalWidth * s),
+        h: Math.round(overlayImg.naturalHeight * s)
+      };
+    }
+
+    function insideOverlay(px, py) {
+      const sz = overlaySize();
+      return px >= pos.x && py >= pos.y && px <= pos.x + sz.w && py <= pos.y + sz.h;
+    }
+
+    function updateStateFromInputs() {
+      pos.x = Math.round(n(xIn, 0));
+      pos.y = Math.round(n(yIn, 0));
+      pos.scale = Math.max(0.01, n(scaleIn, 100) / 100);
+      pos.opacity = Math.max(0, Math.min(1, n(opIn, 1)));
+    }
+
+    function reflectInputs() {
+      xIn.value = Math.round(pos.x);
+      yIn.value = Math.round(pos.y);
+      scaleIn.value = Math.round(pos.scale * 100);
+      opIn.value = pos.opacity.toFixed(2);
+    }
+
+    function updateCanvasSize() {
+      if (!baseLoaded) return;
+      canvas.width = baseImg.naturalWidth;
+      canvas.height = baseImg.naturalHeight;
+    }
+
+    function render() {
+      if (!baseLoaded) return;
+
+      updateCanvasSize();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(baseImg, 0, 0);
+
+      if (overlayLoaded) {
+        const { w, h } = overlaySize();
+        ctx.save();
+        ctx.globalAlpha = pos.opacity;
+        ctx.drawImage(overlayImg, pos.x, pos.y, w, h);
+        ctx.restore();
+
+        // Simple visual guide (overlay bounds)
+        ctx.save();
+        ctx.setLineDash([6, 4]);
+        ctx.strokeStyle = "red";
+        ctx.strokeRect(pos.x + 0.5, pos.y + 0.5, w - 1, h - 1);
+        ctx.restore();
+      }
+
+      const desc = baseLoaded && overlayLoaded
+        ? `Base: ${baseImg.naturalWidth}×${baseImg.naturalHeight} | Overlay @ (${pos.x}, ${pos.y}) scale=${(pos.scale*100).toFixed(0)}%`
+        : 'Load two images to begin.';
+      info.textContent = desc;
+
+      dlBtn.disabled = !(baseLoaded && overlayLoaded);
+    }
+
+    function downloadPNG() {
+      // Render again to ensure guide is not included (it isn't, but re-render clean)
+      render();
+      const a = document.createElement('a');
+      a.download = 'merged.png';
+      a.href = canvas.toDataURL('image/png');
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    // Loaders
+    baseImg.onload = () => { baseLoaded = true; updateCanvasSize(); render(); };
+    overlayImg.onload = () => {
+      overlayLoaded = true;
+      // If overlay larger than base, start at 10% scale to make it visible
+      if (baseLoaded && (overlayImg.naturalWidth > baseImg.naturalWidth || overlayImg.naturalHeight > baseImg.naturalHeight)) {
+        const sx = baseImg.naturalWidth / overlayImg.naturalWidth;
+        const sy = baseImg.naturalHeight / overlayImg.naturalHeight;
+        pos.scale = Math.max(0.1, Math.min(sx, sy) * 0.5);
+      }
+      reflectInputs();
+      render();
+    };
+
+    baseInput.addEventListener('change', () => {
+      const f = baseInput.files[0];
+      if (!f) return;
+      if (baseURL) URL.revokeObjectURL(baseURL);
+      baseURL = URL.createObjectURL(f);
+      baseImg.src = baseURL;
+    });
+
+    overlayInput.addEventListener('change', () => {
+      const f = overlayInput.files[0];
+      if (!f) return;
+      if (overlayURL) URL.revokeObjectURL(overlayURL);
+      overlayURL = URL.createObjectURL(f);
+      overlayImg.src = overlayURL;
+      // Reset placement to top-left
+      pos.x = 0; pos.y = 0;
+      reflectInputs();
+    });
+
+    [xIn, yIn, scaleIn, opIn].forEach(el => {
+      el.addEventListener('input', () => { updateStateFromInputs(); render(); });
+      el.addEventListener('change', () => { updateStateFromInputs(); render(); });
+    });
+
+    // Pointer-based dragging of the overlay
+    canvas.addEventListener('pointerdown', (e) => {
+      if (!overlayLoaded) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = Math.round((e.clientX - rect.left));
+      const y = Math.round((e.clientY - rect.top));
+      if (insideOverlay(x, y)) {
+        dragging = true;
+        dragDX = x - pos.x;
+        dragDY = y - pos.y;
+        canvas.setPointerCapture(e.pointerId);
+      }
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const rect = canvas.getBoundingClientRect();
+      pos.x = Math.round(e.clientX - rect.left - dragDX);
+      pos.y = Math.round(e.clientY - rect.top - dragDY);
+      reflectInputs();
+      render();
+    });
+
+    function endDrag(e){ if (dragging) { dragging = false; canvas.releasePointerCapture(e.pointerId); } }
+    canvas.addEventListener('pointerup', endDrag);
+    canvas.addEventListener('pointercancel', endDrag);
+    canvas.addEventListener('pointerleave', endDrag);
+
+    // Wheel to scale overlay (Ctrl/Meta accelerates)
+    canvas.addEventListener('wheel', (e) => {
+      if (!overlayLoaded) return;
+      e.preventDefault();
+      const factor = (e.ctrlKey || e.metaKey) ? 0.1 : 0.02;
+      pos.scale *= (1 - Math.sign(e.deltaY) * factor);
+      pos.scale = Math.max(0.01, pos.scale);
+      reflectInputs();
+      render();
+    }, { passive: false });
+
+    dlBtn.addEventListener('click', downloadPNG);
+  </script>
+</body>
+</html>

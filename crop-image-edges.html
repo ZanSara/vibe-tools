@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Margin Cropper</title>
+</head>
+<body>
+  <h3>Margin Cropper</h3>
+
+  <div>
+    <label>Image: <input id="file" type="file" accept="image/*"></label>
+  </div>
+
+  <div>
+    <fieldset>
+      <legend>Crop margins (pixels)</legend>
+      <label>Top: <input id="top" type="number" min="0" value="15"></label>
+      <label>Right: <input id="right" type="number" min="0" value="15"></label>
+      <label>Bottom: <input id="bottom" type="number" min="0" value="15"></label>
+      <label>Left: <input id="left" type="number" min="0" value="15"></label>
+    </fieldset>
+  </div>
+
+  <p id="sizes">Load an image to begin.</p>
+
+  <canvas id="preview" width="0" height="0">Canvas preview not supported.</canvas>
+
+  <div>
+    <button id="download" disabled>Download Cropped PNG</button>
+  </div>
+
+  <script>
+    const fileInput = document.getElementById('file');
+    const topIn = document.getElementById('top');
+    const rightIn = document.getElementById('right');
+    const bottomIn = document.getElementById('bottom');
+    const leftIn = document.getElementById('left');
+    const sizes = document.getElementById('sizes');
+    const canvas = document.getElementById('preview');
+    const ctx = canvas.getContext('2d');
+    const downloadBtn = document.getElementById('download');
+
+    let img = new Image();
+    let imgURL = null;
+    let imgW = 0, imgH = 0;
+    let scale = 1; // canvas scale so very large images preview reasonably
+
+    function readNumber(el) {
+      const n = parseInt(el.value, 10);
+      return isNaN(n) ? 0 : Math.max(0, n);
+    }
+
+    function clampMargins(m) {
+      // ensure margins are within image and leave at least 1px result
+      m.left  = Math.max(0, m.left);
+      m.right = Math.max(0, m.right);
+      m.top   = Math.max(0, m.top);
+      m.bottom= Math.max(0, m.bottom);
+
+      const maxRight = Math.max(0, imgW - 1 - m.left);
+      const maxBottom= Math.max(0, imgH - 1 - m.top);
+      m.right = Math.min(m.right, maxRight);
+      m.bottom= Math.min(m.bottom, maxBottom);
+
+      const maxLeft = Math.max(0, imgW - 1 - m.right);
+      const maxTop  = Math.max(0, imgH - 1 - m.bottom);
+      m.left  = Math.min(m.left,  maxLeft);
+      m.top   = Math.min(m.top,   maxTop);
+
+      // reflect any clamping back to the inputs
+      leftIn.value = m.left;
+      rightIn.value = m.right;
+      topIn.value = m.top;
+      bottomIn.value = m.bottom;
+
+      return m;
+    }
+
+    function updatePreview() {
+      if (!imgW || !imgH) return;
+
+      const margins = clampMargins({
+        top: readNumber(topIn),
+        right: readNumber(rightIn),
+        bottom: readNumber(bottomIn),
+        left: readNumber(leftIn)
+      });
+
+      const outW = imgW - margins.left - margins.right;
+      const outH = imgH - margins.top - margins.bottom;
+
+      sizes.textContent =
+        `Original: ${imgW}×${imgH} — Cropped: ${outW}×${outH}`;
+
+      // choose a preview scale so canvas isn't enormous (no CSS)
+      const maxPreview = 1200;
+      scale = Math.min(1, maxPreview / imgW, maxPreview / imgH);
+      canvas.width = Math.round(imgW * scale);
+      canvas.height = Math.round(imgH * scale);
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      // overlay to show crop area: darken outside the crop box
+      const L = Math.round(margins.left * scale);
+      const R = Math.round(margins.right * scale);
+      const T = Math.round(margins.top * scale);
+      const B = Math.round(margins.bottom * scale);
+      const w = canvas.width, h = canvas.height;
+
+      ctx.save();
+      ctx.globalAlpha = 0.35;
+      // top
+      ctx.fillRect(0, 0, w, T);
+      // bottom
+      ctx.fillRect(0, h - B, w, B);
+      // left
+      ctx.fillRect(0, T, L, h - T - B);
+      // right
+      ctx.fillRect(w - R, T, R, h - T - B);
+      ctx.restore();
+
+      // draw a simple rectangle around the kept area
+      ctx.beginPath();
+      ctx.rect(L + 0.5, T + 0.5, w - L - R - 1, h - T - B - 1);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "red";
+      ctx.setLineDash([6, 4]);
+      ctx.stroke();
+
+      // enable/disable download
+      downloadBtn.disabled = (outW <= 0 || outH <= 0);
+    }
+
+    function doDownload() {
+      const margins = clampMargins({
+        top: readNumber(topIn),
+        right: readNumber(rightIn),
+        bottom: readNumber(bottomIn),
+        left: readNumber(leftIn)
+      });
+      const outW = imgW - margins.left - margins.right;
+      const outH = imgH - margins.top - margins.bottom;
+      if (outW <= 0 || outH <= 0) return;
+
+      const out = document.createElement('canvas');
+      out.width = outW;
+      out.height = outH;
+      const octx = out.getContext('2d');
+      octx.drawImage(
+        img,
+        margins.left, margins.top, outW, outH,
+        0, 0, outW, outH
+      );
+
+      const url = out.toDataURL('image/png');
+      const a = document.createElement('a');
+      const fn = (fileInput.files && fileInput.files[0] && fileInput.files[0].name) || "image";
+      const base = fn.replace(/\.[^.]+$/, '');
+      a.download = base + "-cropped.png";
+      a.href = url;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    img.onload = function () {
+      imgW = img.naturalWidth;
+      imgH = img.naturalHeight;
+      updatePreview();
+      downloadBtn.disabled = false;
+    };
+
+    fileInput.addEventListener('change', function () {
+      const f = fileInput.files[0];
+      if (!f) return;
+      if (imgURL) URL.revokeObjectURL(imgURL);
+      imgURL = URL.createObjectURL(f);
+      img.src = imgURL;
+    });
+
+    [topIn, rightIn, bottomIn, leftIn].forEach(el => {
+      el.addEventListener('input', updatePreview);
+      el.addEventListener('change', updatePreview);
+    });
+
+    downloadBtn.addEventListener('click', doDownload);
+  </script>
+</body>
+</html>
