@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>WEBM → MP4 (no CSS)</title>
+</head>
+<body>
+  <h3>Convert .webm to .mp4 (client-side)</h3>
+
+  <div>
+    <label>Source .webm:
+      <input id="file" type="file" accept="video/webm">
+    </label>
+  </div>
+
+  <p id="status">Pick a .webm file to begin.</p>
+
+  <video id="srcPreview" controls width="480"></video>
+  <video id="outPreview" controls width="480"></video>
+
+  <div>
+    <button id="convert" disabled>Convert to MP4</button>
+    <button id="save" disabled>Save MP4</button>
+  </div>
+
+  <script src="./vendor/ffmpeg-st/ffmpeg.min.js"></script>
+  <script>
+
+    import { createFFmpeg, fetchFile }
+    from "./vendor/ffmpeg-st/ffmpeg.min.js";
+
+    // UMD exposes a global `FFmpeg`
+    const { createFFmpeg, fetchFile } = FFmpeg;
+
+    // single-thread core (no cross-origin isolation needed)
+    const ffmpeg = createFFmpeg({
+      log: true,
+      corePath: "./vendor/ffmpeg-st/ffmpeg-core.js"
+    });
+
+    const fileInput = document.getElementById('file');
+    const convertBtn = document.getElementById('convert');
+    const saveBtn = document.getElementById('save');
+    const status = document.getElementById('status');
+    const srcPreview = document.getElementById('srcPreview');
+    const outPreview = document.getElementById('outPreview');
+
+    let loaded = false;
+    let outBlob = null;
+    let srcURL = null;
+    let outURL = null;
+
+    function setStatus(msg) { status.textContent = msg; }
+
+    fileInput.addEventListener('change', () => {
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) { convertBtn.disabled = true; return; }
+      if (srcURL) URL.revokeObjectURL(srcURL);
+      srcURL = URL.createObjectURL(f);
+      srcPreview.src = srcURL;
+      convertBtn.disabled = false;
+      outPreview.removeAttribute('src');
+      if (outURL) { URL.revokeObjectURL(outURL); outURL = null; }
+      if (outBlob) outBlob = null;
+      saveBtn.disabled = true;
+      setStatus(`Ready to convert: ${f.name} (${Math.round(f.size/1024)} kB)`);
+    });
+
+    async function ensureLoaded() {
+      if (!loaded) {
+        setStatus("Loading FFmpeg (first time can take a bit)...");
+        await ffmpeg.load();
+        loaded = true;
+        setStatus("FFmpeg loaded.");
+      }
+    }
+
+    // Convert WEBM to MP4 using H.264/AAC if available in this build.
+    // Falls back to default encoders if the named ones are missing.
+    async function convert() {
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) return;
+
+      await ensureLoaded();
+
+      const inName = "input.webm";
+      const outName = "output.mp4";
+
+      ffmpeg.FS('writeFile', inName, await fetchFile(f));
+
+      // Try H.264 + AAC first; otherwise let ffmpeg pick defaults.
+      // Note: This runs entirely in your browser (no upload).
+      const tryArgs = [
+        ['-i', inName, '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-c:a', 'aac', outName],
+        ['-i', inName, outName]
+      ];
+
+      let success = false, lastError = null;
+      for (const args of tryArgs) {
+        try {
+          setStatus('Converting… (' + args.join(' ') + ')');
+          await ffmpeg.run(...args);
+          success = true;
+          break;
+        } catch (e) {
+          lastError = e;
+        }
+      }
+      if (!success) {
+        setStatus('Conversion failed. See console for details.');
+        console.error(lastError);
+        return;
+      }
+
+      const data = ffmpeg.FS('readFile', outName);
+      outBlob = new Blob([data.buffer], { type: 'video/mp4' });
+      if (outURL) URL.revokeObjectURL(outURL);
+      outURL = URL.createObjectURL(outBlob);
+      outPreview.src = outURL;
+      saveBtn.disabled = false;
+
+      const inMB = (f.size/1048576).toFixed(2);
+      const outMB = (outBlob.size/1048576).toFixed(2);
+      setStatus(`Done. Input: ${inMB} MiB → Output: ${outMB} MiB`);
+    }
+
+    async function save() {
+      if (!outBlob) return;
+
+      const base = (fileInput.files && fileInput.files[0] && fileInput.files[0].name || 'video').replace(/\.[^.]+$/, '');
+      const suggested = base + ".mp4";
+
+      if ('showSaveFilePicker' in window) {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: suggested,
+            types: [{ description: 'MP4 video', accept: { 'video/mp4': ['.mp4'] } }]
+          });
+          const writable = await handle.createWritable();
+          await writable.write(outBlob);
+          await writable.close();
+          setStatus('Saved.');
+          return;
+        } catch (e) {
+          console.warn('Save dialog was canceled or failed; falling back.', e);
+        }
+      }
+
+      // Fallback: default downloads folder
+      const a = document.createElement('a');
+      a.href = outURL;
+      a.download = suggested;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setStatus('Saved to default downloads.');
+    }
+
+    convertBtn.addEventListener('click', () => { convert().catch(err => { console.error(err); setStatus('Error: ' + err.message); }); });
+    saveBtn.addEventListener('click', () => { save().catch(err => { console.error(err); setStatus('Error: ' + err.message); }); });
+  </script>
+</body>
+</html>
