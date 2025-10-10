@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>2:1 Image Cropper (Transparent Selection, Full-Size Preview)</title>
+</head>
+<body>
+  <h1>2:1 Cropper</h1>
+
+  <div>
+    <label>Image:
+      <input id="file" type="file" accept="image/*" />
+    </label>
+  </div>
+
+  <div>
+    <label>Crop width (px):
+      <input id="cropWidth" type="number" min="10" step="1" />
+    </label>
+    <label>Export width (px):
+      <input id="exportWidth" type="number" min="10" step="1" value="800" />
+    </label>
+    <button id="downloadBtn" disabled>Download cropped image (PNG)</button>
+  </div>
+
+  <!-- Canvas will be set to the image's intrinsic size (full-size preview) -->
+  <canvas id="canvas"></canvas>
+
+  <script>
+    (function () {
+      const fileInput = document.getElementById('file');
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext('2d');
+      const cropWidthInput = document.getElementById('cropWidth');
+      const exportWidthInput = document.getElementById('exportWidth');
+      const downloadBtn = document.getElementById('downloadBtn');
+
+      const RATIO_W = 2; // 2:1
+      const RATIO_H = 1;
+
+      let img = null;
+      let imgW = 0, imgH = 0;
+
+      // Crop rectangle (in image/canvas px)
+      const crop = { x: 0, y: 0, w: 0, h: 0 };
+
+      // Pointer interaction state
+      let dragging = false;
+      let dragMode = null; // 'move' | 'nw' | 'ne' | 'sw' | 'se'
+      let dragStart = { x: 0, y: 0 };
+      let cropStart = { x: 0, y: 0, w: 0, h: 0 };
+
+      // Handle visuals
+      const HANDLE_SIZE = 10;
+
+      // Utilities
+      function clamp(val, min, max) { return Math.max(min, Math.min(max, val)); }
+
+      function fitCanvasToImage() {
+        // Make the preview exactly the original image size
+        canvas.width = imgW;
+        canvas.height = imgH;
+      }
+
+      function initCrop() {
+        // Max crop that fits 2:1 inside image
+        const maxByWidth = imgW;
+        const maxByHeight = imgH * (RATIO_W / RATIO_H); // width allowed by height constraint
+        const usableW = Math.min(maxByWidth, maxByHeight);
+        crop.w = Math.max(10, Math.floor(usableW * 0.8));
+        crop.h = Math.floor(crop.w * (RATIO_H / RATIO_W));
+        if (crop.h > imgH) {
+          crop.h = imgH;
+          crop.w = Math.floor(crop.h * (RATIO_W / RATIO_H));
+        }
+        crop.x = Math.floor((imgW - crop.w) / 2);
+        crop.y = Math.floor((imgH - crop.h) / 2);
+        cropWidthInput.value = crop.w;
+      }
+
+      function draw() {
+        if (!img) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          return;
+        }
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Full-strength image (no dimming)
+        ctx.drawImage(img, 0, 0, imgW, imgH);
+
+        // Transparent selection rectangle: draw ONLY borders + handles (no fill, no outside dim)
+        ctx.save();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'black';
+        ctx.strokeRect(crop.x + 0.5, crop.y + 0.5, crop.w - 1, crop.h - 1);
+
+        // Optional helper grid (still transparent fill)
+        ctx.beginPath();
+        ctx.moveTo(crop.x + crop.w / 3, crop.y);
+        ctx.lineTo(crop.x + crop.w / 3, crop.y + crop.h);
+        ctx.moveTo(crop.x + (2 * crop.w) / 3, crop.y);
+        ctx.lineTo(crop.x + (2 * crop.w) / 3, crop.y + crop.h);
+        ctx.moveTo(crop.x, crop.y + crop.h / 3);
+        ctx.lineTo(crop.x + crop.w, crop.y + crop.h / 3);
+        ctx.moveTo(crop.x, crop.y + (2 * crop.h) / 3);
+        ctx.lineTo(crop.x + crop.w, crop.y + (2 * crop.h) / 3);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.stroke();
+
+        // Handles (corners)
+        drawHandle(crop.x, crop.y); // NW
+        drawHandle(crop.x + crop.w, crop.y); // NE
+        drawHandle(crop.x, crop.y + crop.h); // SW
+        drawHandle(crop.x + crop.w, crop.y + crop.h); // SE
+        ctx.restore();
+      }
+
+      function drawHandle(cx, cy) {
+        const s = HANDLE_SIZE;
+        ctx.save();
+        ctx.fillStyle = 'white';
+        ctx.fillRect(cx - s / 2, cy - s / 2, s, s);
+        ctx.strokeStyle = 'black';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(cx - s / 2 + 0.5, cy - s / 2 + 0.5, s - 1, s - 1);
+        ctx.restore();
+      }
+
+      function pointInRect(px, py, rx, ry, rw, rh) {
+        return px >= rx && px <= rx + rw && py >= ry && py <= ry + rh;
+      }
+
+      function hitTestHandle(px, py) {
+        const hs = HANDLE_SIZE;
+        const handles = [
+          { name: 'nw', x: crop.x, y: crop.y },
+          { name: 'ne', x: crop.x + crop.w, y: crop.y },
+          { name: 'sw', x: crop.x, y: crop.y + crop.h },
+          { name: 'se', x: crop.x + crop.w, y: crop.y + crop.h },
+        ];
+        for (const h of handles) {
+          if (pointInRect(px, py, h.x - hs / 2, h.y - hs / 2, hs, hs)) {
+            return h.name;
+          }
+        }
+        return null;
+      }
+
+      function keepCropInBounds() {
+        crop.x = clamp(crop.x, 0, imgW - crop.w);
+        crop.y = clamp(crop.y, 0, imgH - crop.h);
+      }
+
+      function setCropByWidth(newW, anchor) {
+        newW = clamp(Math.floor(newW), 10, imgW);
+        let newH = Math.floor(newW * (RATIO_H / RATIO_W));
+        if (newH > imgH) {
+          newH = imgH;
+          newW = Math.floor(newH * (RATIO_W / RATIO_H));
+        }
+
+        if (anchor === 'center') {
+          const cx = crop.x + crop.w / 2;
+          const cy = crop.y + crop.h / 2;
+          crop.w = newW; crop.h = newH;
+          crop.x = Math.floor(cx - crop.w / 2);
+          crop.y = Math.floor(cy - crop.h / 2);
+        } else if (anchor && typeof anchor.x === 'number' && typeof anchor.y === 'number') {
+          const ax = anchor.x, ay = anchor.y;
+          let ox = ax === crop.x ? crop.x + crop.w : crop.x;
+          let oy = ay === crop.y ? crop.y + crop.h : crop.y;
+          const dirX = Math.sign(ox - ax) || 1;
+          const dirY = Math.sign(oy - ay) || 1;
+          crop.w = newW; crop.h = newH;
+          if (dirX > 0) crop.x = ax; else crop.x = ax - crop.w;
+          if (dirY > 0) crop.y = ay; else crop.y = ay - crop.h;
+        } else {
+          crop.w = newW; crop.h = newH;
+        }
+        keepCropInBounds();
+        cropWidthInput.value = crop.w;
+      }
+
+      // Pointer events
+      canvas.addEventListener('pointerdown', (e) => {
+        if (!img) return;
+        const rect = canvas.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+
+        const handle = hitTestHandle(px, py);
+        if (handle) {
+          dragMode = handle;
+          dragging = true;
+          canvas.setPointerCapture(e.pointerId);
+          dragStart = { x: px, y: py };
+          cropStart = { ...crop };
+          return;
+        }
+
+        if (pointInRect(px, py, crop.x, crop.y, crop.w, crop.h)) {
+          dragMode = 'move';
+          dragging = true;
+          canvas.setPointerCapture(e.pointerId);
+          dragStart = { x: px, y: py };
+          cropStart = { ...crop };
+        }
+      });
+
+      canvas.addEventListener('pointermove', (e) => {
+        if (!img) return;
+        const rect = canvas.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+
+        if (!dragging) {
+          draw();
+          return;
+        }
+
+        if (dragMode === 'move') {
+          const dx = px - dragStart.x;
+          const dy = py - dragStart.y;
+          crop.x = cropStart.x + dx;
+          crop.y = cropStart.y + dy;
+          keepCropInBounds();
+          draw();
+          return;
+        }
+
+        const corners = {
+          nw: { ax: cropStart.x + cropStart.w, ay: cropStart.y + cropStart.h, invX: true, invY: true },
+          ne: { ax: cropStart.x,                 ay: cropStart.y + cropStart.h, invX: false, invY: true },
+          sw: { ax: cropStart.x + cropStart.w, ay: cropStart.y,                 invX: true, invY: false },
+          se: { ax: cropStart.x,                 ay: cropStart.y,                 invX: false, invY: false },
+        };
+        if (corners[dragMode]) {
+          const { ax, ay, invX, invY } = corners[dragMode];
+          let vx = px - ax;
+          let vy = py - ay;
+          if (invX) vx = -vx;
+          if (invY) vy = -vy;
+
+          const wFromX = Math.abs(vx);
+          const wFromY = Math.abs(vy) * (RATIO_W / RATIO_H);
+          let newW = Math.min(wFromX, wFromY);
+          newW = Math.max(20, newW);
+
+          const maxWByBounds = (() => {
+            let maxW = Infinity;
+            if (dragMode === 'nw' || dragMode === 'sw') {
+              maxW = Math.min(maxW, ax);
+            } else {
+              maxW = Math.min(maxW, imgW - ax);
+            }
+            if (dragMode === 'nw' || dragMode === 'ne') {
+              maxW = Math.min(maxW, ay * (RATIO_W / RATIO_H));
+            } else {
+              maxW = Math.min(maxW, (imgH - ay) * (RATIO_W / RATIO_H));
+            }
+            return Math.floor(maxW);
+          })();
+
+          newW = clamp(Math.floor(newW), 20, Math.max(20, maxWByBounds));
+          const anchor = { x: ax, y: ay };
+          setCropByWidth(newW, anchor);
+          draw();
+        }
+      });
+
+      window.addEventListener('pointerup', (e) => {
+        if (!dragging) return;
+        dragging = false;
+        dragMode = null;
+        try { canvas.releasePointerCapture(e.pointerId); } catch {}
+      });
+
+      // Inputs
+      cropWidthInput.addEventListener('input', () => {
+        if (!img) return;
+        const val = parseInt(cropWidthInput.value, 10);
+        if (!Number.isFinite(val)) return;
+        setCropByWidth(val, 'center');
+        draw();
+      });
+
+      exportWidthInput.addEventListener('input', () => {
+        // No-op until export
+      });
+
+      downloadBtn.addEventListener('click', () => {
+        if (!img) return;
+        let outW = parseInt(exportWidthInput.value, 10);
+        if (!Number.isFinite(outW) || outW < 10) outW = 800;
+        const outH = Math.floor(outW * (RATIO_H / RATIO_W));
+
+        const out = document.createElement('canvas');
+        out.width = outW;
+        out.height = outH;
+
+        const octx = out.getContext('2d');
+        octx.imageSmoothingQuality = 'high';
+        octx.drawImage(
+          img,
+          crop.x, crop.y, crop.w, crop.h,
+          0, 0, outW, outH
+        );
+
+        const url = out.toDataURL('image/png');
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'crop-2x1.png';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      });
+
+      // File loading
+      fileInput.addEventListener('change', () => {
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        const url = URL.createObjectURL(file);
+        const image = new Image();
+        image.onload = () => {
+          img = image;
+          imgW = image.naturalWidth;
+          imgH = image.naturalHeight;
+          fitCanvasToImage(); // full-size preview
+          initCrop();
+          draw();
+          downloadBtn.disabled = false;
+          URL.revokeObjectURL(url);
+        };
+        image.onerror = () => {
+          URL.revokeObjectURL(url);
+          alert('Failed to load image.');
+        };
+        image.src = url;
+      });
+
+      draw();
+    })();
+  </script>
+</body>
+</html>
