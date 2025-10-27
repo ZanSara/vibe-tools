@@ -2,41 +2,30 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Image → ICO (client-side, no CSS)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="style.css">
+  <title>Image → ICO</title>
 </head>
 <body>
   <h1>Image → .ico converter</h1>
-
   <p>
     <label for="file">Choose an image (jpg, png, gif, webp, svg): </label>
     <input id="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" />
   </p>
 
-  <fieldset>
-    <legend>Icon sizes (select at least one)</legend>
-    <label><input type="checkbox" class="size" value="16" checked>16×16</label>
-    <label><input type="checkbox" class="size" value="32" checked>32×32</label>
-    <label><input type="checkbox" class="size" value="48" checked>48×48</label>
-    <label><input type="checkbox" class="size" value="64" checked>64×64</label>
-    <label><input type="checkbox" class="size" value="128" checked>128×128</label>
-    <label><input type="checkbox" class="size" value="256" checked>256×256</label>
-  </fieldset>
+  <p>Select size:</p>
+  <label><input type="checkbox" name="size" value="16" style="display: inline; margin: 5px;">16x16</label>
+  <label><input type="checkbox" name="size" value="32" style="display: inline; margin: 5px;">32x32</label>
+  <label><input type="checkbox" name="size" value="48" style="display: inline; margin: 5px;">48x48</label>
+  <label><input type="checkbox" name="size" value="64" style="display: inline; margin: 5px;">64x64</label>
+  <label><input type="checkbox" name="size" value="128" style="display: inline; margin: 5px;">128x128</label>
+  <label><input type="checkbox" name="size" value="256" checked  style="display: inline; margin: 5px;">256x256</label>
 
   <p>
     <button id="convert">Convert to .ico</button>
   </p>
 
   <div id="result"></div>
-
-  <details>
-    <summary>Notes</summary>
-    <ul>
-      <li>This runs entirely in your browser; no uploads.</li>
-      <li>Animated GIF/WEBP: only the first frame is used.</li>
-      <li>Non-square images are letterboxed to keep aspect ratio.</li>
-    </ul>
-  </details>
 
   <script>
     "use strict";
@@ -65,13 +54,13 @@
       }
 
       try {
-        appendText("Loading image…");
+        console.log("Loading image…");
         const img = await loadImageFromFile(file);
 
-        appendText("Rendering PNGs for each size…");
+        console.log("Rendering PNGs for each size…");
         const pngBuffers = await Promise.all(sizes.map(sz => rasterizeToPngBuffer(img, sz)));
 
-        appendText("Assembling ICO…");
+        console.log("Assembling ICO…");
         const icoBlob = buildIcoFromPngs(pngBuffers, sizes);
 
         const baseName = (file.name || "icon").replace(/\.[^.]+$/,"") || "icon";
@@ -84,7 +73,7 @@
         a.textContent = "Download " + icoName + " (" + formatBytes(icoBlob.size) + ")";
         resultDiv.appendChild(a);
 
-        appendText("Done.");
+        console.log("Done.");
       } catch (err) {
         console.error(err);
         appendText("Conversion failed: " + (err && err.message ? err.message : String(err)));
